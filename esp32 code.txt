@@ -1,0 +1,221 @@
+// Blynk Template Definitions
+#define BLYNK_TEMPLATE_ID "TMPL37zBn6ze_"
+#define BLYNK_TEMPLATE_NAME "Traffic Light Control"
+#define BLYNK_AUTH_TOKEN "izbyQuW2CEcZU49WGAyZgolIllvqK2WM"
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <WebServer.h>
+
+// Traffic Light GPIO Pins
+#define RED_LIGHT 5
+#define YELLOW_LIGHT 18
+#define GREEN_LIGHT 19
+
+// System States
+int emergencyOverrideState = 0; // 0 = Auto, 1 = Manual
+int vehicle_count = 0;
+int previousState = 0; // 0 = Red, 1 = Green
+unsigned long lastStatsUpdate = 0;
+const int STATS_INTERVAL = 2000; // Update stats every 2 seconds
+
+// Track Light States
+String currentLightColor = "RED";
+String trafficDensity = "LOW";
+
+// WiFi Credentials
+const char* ssid = "Jarvis";
+const char* password = "sarkarnoobda";
+
+// Web Server for Vehicle Count Updates
+WebServer server(80);
+
+// Function to update traffic density
+void updateTrafficDensity() {
+    if (vehicle_count <= 3) {
+        trafficDensity = "LOW";
+    } else if (vehicle_count <= 8) {
+        trafficDensity = "MEDIUM";
+    } else {
+        trafficDensity = "HIGH";
+    }
+}
+
+// Function to print system stats
+void printSystemStats() {
+    if (millis() - lastStatsUpdate >= STATS_INTERVAL) {
+        Serial.println("\n========= TRAFFIC SYSTEM STATUS =========");
+        Serial.println("----------------------------------------");
+
+        Serial.print("Mode: ");
+        Serial.println(emergencyOverrideState ? "MANUAL" : "AUTOMATIC");
+
+        Serial.print("Current Light: ");
+        Serial.println(currentLightColor);
+
+        Serial.print("Vehicle Count: ");
+        Serial.println(vehicle_count);
+
+        Serial.print("Traffic Density: ");
+        Serial.println(trafficDensity);
+
+        Serial.println("\nSystem Recommendations:");
+        if (emergencyOverrideState) {
+            Serial.println("- Manual control active");
+        } else {
+            if (vehicle_count > 8 && currentLightColor == "RED") {
+                Serial.println("- High traffic detected, switching to GREEN");
+            } else if (vehicle_count <= 3 && currentLightColor == "GREEN") {
+                Serial.println("- Low traffic detected, switching to RED");
+            } else {
+                Serial.println("- Traffic flow normal");
+            }
+        }
+        Serial.println("----------------------------------------");
+
+        lastStatsUpdate = millis();
+    }
+}
+
+// ESP32 Setup
+void setup() {
+    Serial.begin(115200);
+
+    // Initialize Traffic Light Pins
+    pinMode(RED_LIGHT, OUTPUT);
+    pinMode(YELLOW_LIGHT, OUTPUT);
+    pinMode(GREEN_LIGHT, OUTPUT);
+
+    // Set Initial State (Failsafe: RED ON)
+    digitalWrite(RED_LIGHT, HIGH);
+    digitalWrite(YELLOW_LIGHT, LOW);
+    digitalWrite(GREEN_LIGHT, LOW);
+    currentLightColor = "RED";
+    previousState = 0;
+    Serial.println("System Startup: RED ON");
+
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nConnected to WiFi");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+
+    // Initialize Blynk
+    Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
+
+    // Start Web Server
+    server.on("/vehicle_count", HTTP_GET, handleVehicleCount);
+    server.begin();
+
+    Serial.println("System Ready - Automatic Mode Active");
+}
+
+// Handle Vehicle Count Updates
+void handleVehicleCount() {
+    if (server.hasArg("count")) {
+        vehicle_count = server.arg("count").toInt();
+        updateTrafficDensity();
+        server.send(200, "text/plain", "OK");
+    }
+}
+
+// Blynk Manual Override
+BLYNK_WRITE(V0) {
+    emergencyOverrideState = param.asInt();
+    if (emergencyOverrideState == 1) {
+        // Disable all lights in manual mode
+        digitalWrite(RED_LIGHT, LOW);
+        digitalWrite(YELLOW_LIGHT, LOW);
+        digitalWrite(GREEN_LIGHT, LOW);
+        Serial.println("!!! EMERGENCY OVERRIDE ACTIVATED !!!");
+        currentLightColor = "NONE";
+    } else {
+        Serial.println(">>> Emergency Override OFF - Returning to Auto Mode");
+        previousState = 0;
+        digitalWrite(RED_LIGHT, HIGH);
+        digitalWrite(YELLOW_LIGHT, LOW);
+        digitalWrite(GREEN_LIGHT, LOW);
+        currentLightColor = "RED";
+    }
+}
+
+// Manual Red Light Control
+BLYNK_WRITE(V1) {
+    if (emergencyOverrideState == 1) {
+        digitalWrite(RED_LIGHT, param.asInt());
+        if (param.asInt()) currentLightColor = "RED";
+    }
+}
+
+// Manual Yellow Light Control
+BLYNK_WRITE(V2) {
+    if (emergencyOverrideState == 1) {
+        digitalWrite(YELLOW_LIGHT, param.asInt());
+        if (param.asInt()) currentLightColor = "YELLOW";
+    }
+}
+
+// Manual Green Light Control
+BLYNK_WRITE(V3) {
+    if (emergencyOverrideState == 1) {
+        digitalWrite(GREEN_LIGHT, param.asInt());
+        if (param.asInt()) currentLightColor = "GREEN";
+    }
+}
+
+// Automatic Traffic Light Control
+void controlTrafficLight() {
+    Serial.print("Checking control logic: vehicle_count = ");
+    Serial.println(vehicle_count);
+
+    if (emergencyOverrideState == 1) {
+        Serial.println("Manual mode active - Skipping automatic control.");
+        return;
+    }
+
+    if (vehicle_count > 8 && previousState == 0) {
+        Serial.println("\n>>> Switching to GREEN - High traffic detected");
+        digitalWrite(RED_LIGHT, LOW);
+        digitalWrite(YELLOW_LIGHT, LOW);
+        digitalWrite(GREEN_LIGHT, HIGH);
+        currentLightColor = "GREEN";
+        previousState = 1;
+    } 
+    else if (vehicle_count <= 3 && previousState == 1) {
+        Serial.println("\n>>> Switching to RED - Traffic cleared");
+        digitalWrite(GREEN_LIGHT, LOW);
+
+        // Blink Yellow Light 3 Times Before Switching to Red
+        for (int i = 0; i < 3; i++) {
+            digitalWrite(YELLOW_LIGHT, HIGH);
+            delay(500);
+            digitalWrite(YELLOW_LIGHT, LOW);
+            delay(500);
+        }
+
+        digitalWrite(RED_LIGHT, HIGH);
+        currentLightColor = "RED";
+        previousState = 0;
+    }
+}
+
+// Main Loop
+void loop() {
+    Blynk.run();
+    server.handleClient();
+    server.begin();
+    Serial.println("ESP32 Web Server Started!");
+
+
+    if (emergencyOverrideState == 0) {
+        controlTrafficLight();
+    }
+
+    printSystemStats();
+    delay(500);
+}
